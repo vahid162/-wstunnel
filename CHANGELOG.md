@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.3.5
+- Added nginx config backup (timestamped) before overwrite in auto-config flow.
+- Added automatic rollback if nginx config test/reload fails after applying new config.
+
+## 0.3.4
+- Added stricter input validation for domain/FQDN/IP values in wizard and CLI flags.
+- Added strict format validation for `--map` and `--restrict-to` to reduce beginner configuration errors.
+
 ## 0.3.3
 - Updated README auto-installer command to use the repository real GitHub raw URL.
 - Revalidated wizard/script smoke flows after docs update.

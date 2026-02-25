@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-SCRIPT_VERSION="0.3.6"
+SCRIPT_VERSION="0.3.7"
 
 DEFAULT_SERVER_LOCAL_ADDR="127.0.0.1"
 DEFAULT_SERVER_LOCAL_PORT="8080"
@@ -26,6 +26,7 @@ Usage:
   smart-wstunnel.sh make-server-service [options]
   smart-wstunnel.sh make-client-service [options]
   smart-wstunnel.sh print-nginx-snippet [options]
+  smart-wstunnel.sh diagnose
 
 Commands:
   wizard
@@ -43,6 +44,9 @@ Commands:
 
   print-nginx-snippet
       Print nginx websocket reverse proxy location.
+
+  diagnose
+      Run built-in health checks (systemd status, journal, listening ports).
 
 Common options:
   --yes
@@ -770,6 +774,45 @@ wizard_in() {
   log "IN setup finished."
 }
 
+run_diagnose_service_check() {
+  local service_name="$1"
+  printf '\n--- %s ---\n' "${service_name}"
+
+  if ! command -v systemctl >/dev/null 2>&1; then
+    warn "systemctl not found; skipping status for ${service_name}"
+  else
+    if ! systemctl status "${service_name}" --no-pager -l 2>/tmp/smart-wstunnel.systemctl.err; then
+      warn "Could not read systemd status for ${service_name} (non-systemd environment or insufficient privileges)."
+      sed -n '1,2p' /tmp/smart-wstunnel.systemctl.err >&2 || true
+    fi
+  fi
+
+  if ! command -v journalctl >/dev/null 2>&1; then
+    warn "journalctl not found; skipping logs for ${service_name}"
+  else
+    if ! journalctl -u "${service_name}" -n 100 --no-pager 2>/tmp/smart-wstunnel.journal.err; then
+      warn "Could not read journal logs for ${service_name}."
+      sed -n '1,2p' /tmp/smart-wstunnel.journal.err >&2 || true
+    fi
+  fi
+}
+
+diagnose() {
+  printf '=== smart-wstunnel diagnose ===\n'
+  run_diagnose_service_check "wstunnel-server"
+  run_diagnose_service_check "wstunnel-client"
+
+  printf '\n--- listening ports (common tunnel ports) ---\n'
+  if command -v ss >/dev/null 2>&1; then
+    ss -lntup | egrep '(:443|:8080|:22335|:24443|:51820)' || true
+  else
+    warn "ss command not found; skipping ports check"
+  fi
+
+  printf '\n=== diagnose completed ===\n'
+}
+
+
 wizard() {
   require_root
   log "Welcome to smart-wstunnel true wizard"
@@ -823,6 +866,7 @@ main() {
     make-server-service) make_server_service "$@" ;;
     make-client-service) make_client_service "$@" ;;
     print-nginx-snippet) print_nginx_snippet "$@" ;;
+    diagnose) diagnose "$@" ;;
     -h|--help|help) usage ;;
     version|--version) echo "smart-wstunnel ${SCRIPT_VERSION}" ;;
     *) die "Unknown command: ${cmd}" ;;

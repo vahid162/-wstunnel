@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.3.7
+- Added built-in `diagnose` command to run service status/log and common-port health checks from the script itself.
+
 ## 0.3.6
 - Added post-install checklist summary at the end of wizard runs (OUT/IN) with copy-ready health-check commands.
 - Included rendered service names/files and nginx config path (when auto-generated) in final wizard summary.

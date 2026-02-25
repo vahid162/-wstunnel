@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-SCRIPT_VERSION="0.3.4"
+SCRIPT_VERSION="0.3.5"
 
 DEFAULT_SERVER_LOCAL_ADDR="127.0.0.1"
 DEFAULT_SERVER_LOCAL_PORT="8080"
@@ -269,13 +269,19 @@ nginx_test_and_reload() {
     return 0
   fi
 
-  "${NGINX_BIN}" -t
+  if ! "${NGINX_BIN}" -t; then
+    return 1
+  fi
+
   if [[ "${NGINX_RELOAD_MODE}" == "systemd" ]]; then
-    systemctl reload nginx || "${NGINX_BIN}" -s reload
+    if ! systemctl reload nginx; then
+      "${NGINX_BIN}" -s reload
+    fi
   else
     "${NGINX_BIN}" -s reload
   fi
 }
+
 
 install_binary() {
   require_root
@@ -390,6 +396,18 @@ print_nginx_snippet() {
   build_nginx_snippet "${location_path}" "${upstream}"
 }
 
+restore_nginx_conf() {
+  local conf_path="$1" backup_path="${2:-}"
+
+  if [[ -n "${backup_path}" && -f "${backup_path}" ]]; then
+    cp "${backup_path}" "${conf_path}"
+    warn "Rolled back nginx config to backup: ${backup_path}"
+  else
+    rm -f "${conf_path}"
+    warn "Rolled back nginx config by removing new file: ${conf_path}"
+  fi
+}
+
 configure_nginx_ws() {
   local domain="$1" location_path="$2" upstream="$3"
 
@@ -420,10 +438,26 @@ EOF_CONF
   fi
 
   mkdir -p "${NGINX_CONF_DIR}"
+
+  local backup_path=""
+  if [[ -f "${conf_path}" ]]; then
+    backup_path="${conf_path}.bak.$(date +%Y%m%d-%H%M%S)"
+    cp "${conf_path}" "${backup_path}"
+    log "nginx backup created: ${backup_path}"
+  fi
+
   printf '%s\n' "${content}" > "${conf_path}"
-  nginx_test_and_reload
+
+  if ! nginx_test_and_reload; then
+    warn "nginx test/reload failed after writing ${conf_path}. Rolling back config."
+    restore_nginx_conf "${conf_path}" "${backup_path}"
+    nginx_test_and_reload || true
+    die "nginx config apply failed and rollback was attempted"
+  fi
+
   log "nginx config applied: ${conf_path}"
 }
+
 
 append_tunnel_profile() {
   local mode="$1"

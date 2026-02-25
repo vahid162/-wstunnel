@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.3
+- Updated README auto-installer command to use the repository real GitHub raw URL.
+- Revalidated wizard/script smoke flows after docs update.
+
 ## 0.3.2
 - Added nginx runtime detection for both system installs and aaPanel installs with custom binary/conf paths.
 - Updated nginx config/reload flow to use detected binary/path safely.

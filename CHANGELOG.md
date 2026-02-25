@@ -1,19 +1,13 @@
 # Changelog
 
-## 0.3.7
-- Added built-in `diagnose` command to run service status/log and common-port health checks from the script itself.
-
-## 0.3.6
-- Added post-install checklist summary at the end of wizard runs (OUT/IN) with copy-ready health-check commands.
-- Included rendered service names/files and nginx config path (when auto-generated) in final wizard summary.
-
 ## 0.3.5
-- Added nginx config backup (timestamped) before overwrite in auto-config flow.
-- Added automatic rollback if nginx config test/reload fails after applying new config.
+- Completed nginx config backup+rollback behavior when test/reload fails.
+- Finalized validation/SSL safety flow in wizard and non-interactive commands.
 
 ## 0.3.4
-- Added stricter input validation for domain/FQDN/IP values in wizard and CLI flags.
-- Added strict format validation for `--map` and `--restrict-to` to reduce beginner configuration errors.
+- Added SSL path detection/prompt flow (including aaPanel certificate paths) before nginx config generation.
+- Added input validations for domain, host:port and map specs to reduce invalid runtime configs.
+- Added nginx config backup and rollback if test/reload fails.
 
 ## 0.3.3
 - Updated README auto-installer command to use the repository real GitHub raw URL.

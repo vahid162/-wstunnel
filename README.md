@@ -25,6 +25,7 @@ sudo bash smart-wstunnel.sh wizard
 - ساخت سرویس systemd برای `wstunnel-server` یا `wstunnel-client`
 - روی OUT: تشخیص نصب بودن nginx (هم system nginx و هم aaPanel nginx) و در صورت نیاز نصب خودکار
 - روی OUT: امکان ساخت خودکار کانفیگ nginx و `nginx -t` + reload
+- روی OUT: تلاش برای تشخیص خودکار مسیر SSL (LetsEncrypt/aaPanel) و در صورت نیاز پرسش از کاربر
 - روی IN: ساخت mapهای TCP/UDP با پروفایل آماده (Xray/OpenVPN/WireGuard/AnyConnect)
 
 ## نکته مهم (جواب سوال رایج)
@@ -39,7 +40,6 @@ sudo bash smart-wstunnel.sh install-binary
 sudo bash smart-wstunnel.sh make-server-service --secret gw-2026-01 --restrict-to 127.0.0.1:22335
 sudo bash smart-wstunnel.sh make-client-service --domain tnl.example.com --secret gw-2026-01 --map tcp://0.0.0.0:22335:127.0.0.1:22335
 sudo bash smart-wstunnel.sh print-nginx-snippet --location-path / --upstream http://127.0.0.1:8080
-sudo bash smart-wstunnel.sh diagnose
 ```
 
 ## عیب‌یابی سریع
@@ -54,4 +54,4 @@ sudo ss -lntup | egrep '(:443|:8080|:22335|:24443|:51820)\b' || true
 
 ## نسخه
 
-نسخه فعلی: `0.3.7`
+نسخه فعلی: `0.3.5`

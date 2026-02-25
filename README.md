@@ -23,7 +23,7 @@ sudo bash smart-wstunnel.sh wizard
 - نصب/آپدیت باینری رسمی `wstunnel`
 - انتخاب نقش سرور (OUT یا IN)
 - ساخت سرویس systemd برای `wstunnel-server` یا `wstunnel-client`
-- روی OUT: تشخیص نصب بودن nginx و در صورت نیاز نصب خودکار
+- روی OUT: تشخیص نصب بودن nginx (هم system nginx و هم aaPanel nginx) و در صورت نیاز نصب خودکار
 - روی OUT: امکان ساخت خودکار کانفیگ nginx و `nginx -t` + reload
 - روی IN: ساخت mapهای TCP/UDP با پروفایل آماده (Xray/OpenVPN/WireGuard/AnyConnect)
 
@@ -53,4 +53,4 @@ sudo ss -lntup | egrep '(:443|:8080|:22335|:24443|:51820)\b' || true
 
 ## نسخه
 
-نسخه فعلی: `0.3.1`
+نسخه فعلی: `0.3.2`

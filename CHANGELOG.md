@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.2
+- Added nginx runtime detection for both system installs and aaPanel installs with custom binary/conf paths.
+- Updated nginx config/reload flow to use detected binary/path safely.
+
 ## 0.3.1
 - Fixed wizard `--yes` behavior to avoid infinite add-more loops and auto-select defaults safely.
 

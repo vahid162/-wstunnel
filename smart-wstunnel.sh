@@ -1,12 +1,16 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-SCRIPT_VERSION="0.3.1"
+SCRIPT_VERSION="0.3.2"
 
 DEFAULT_SERVER_LOCAL_ADDR="127.0.0.1"
 DEFAULT_SERVER_LOCAL_PORT="8080"
 DEFAULT_CLIENT_PING_SEC="30"
 DEFAULT_NGINX_LOCATION_PATH="/"
+
+NGINX_BIN="nginx"
+NGINX_CONF_DIR="/etc/nginx/conf.d"
+NGINX_RELOAD_MODE="systemd"
 
 log() { printf '[INFO] %s\n' "$*"; }
 warn() { printf '[WARN] %s\n' "$*" >&2; }
@@ -139,6 +143,49 @@ ensure_requirements() {
   fi
 }
 
+detect_nginx_runtime() {
+  if command -v nginx >/dev/null 2>&1; then
+    NGINX_BIN="$(command -v nginx)"
+    NGINX_CONF_DIR="/etc/nginx/conf.d"
+    NGINX_RELOAD_MODE="systemd"
+    return 0
+  fi
+
+  if [[ -x "/www/server/nginx/sbin/nginx" ]]; then
+    NGINX_BIN="/www/server/nginx/sbin/nginx"
+    if [[ -d "/www/server/panel/vhost/nginx" ]]; then
+      NGINX_CONF_DIR="/www/server/panel/vhost/nginx"
+    elif [[ -d "/www/server/nginx/conf/vhost" ]]; then
+      NGINX_CONF_DIR="/www/server/nginx/conf/vhost"
+    else
+      NGINX_CONF_DIR="/www/server/nginx/conf/conf.d"
+    fi
+    NGINX_RELOAD_MODE="signal"
+    return 0
+  fi
+
+  return 1
+}
+
+nginx_test_and_reload() {
+  if [[ "${DRY_RUN:-0}" == "1" ]]; then
+    log "[dry-run] ${NGINX_BIN} -t"
+    if [[ "${NGINX_RELOAD_MODE}" == "systemd" ]]; then
+      log "[dry-run] systemctl reload nginx"
+    else
+      log "[dry-run] ${NGINX_BIN} -s reload"
+    fi
+    return 0
+  fi
+
+  "${NGINX_BIN}" -t
+  if [[ "${NGINX_RELOAD_MODE}" == "systemd" ]]; then
+    systemctl reload nginx || "${NGINX_BIN}" -s reload
+  else
+    "${NGINX_BIN}" -s reload
+  fi
+}
+
 install_binary() {
   require_root
   local requested_version=""
@@ -196,8 +243,8 @@ install_binary() {
 }
 
 ensure_nginx_installed() {
-  if command -v nginx >/dev/null 2>&1; then
-    log "nginx already installed."
+  if detect_nginx_runtime; then
+    log "nginx detected: ${NGINX_BIN} (conf dir: ${NGINX_CONF_DIR})"
     return 0
   fi
 
@@ -209,6 +256,20 @@ ensure_nginx_installed() {
 
   install_packages nginx
   run_cmd systemctl enable --now nginx
+
+  if [[ "${DRY_RUN:-0}" == "1" ]]; then
+    NGINX_BIN="nginx"
+    NGINX_CONF_DIR="/etc/nginx/conf.d"
+    NGINX_RELOAD_MODE="systemd"
+    log "[dry-run] assuming nginx available after install"
+    return 0
+  fi
+
+  if ! detect_nginx_runtime; then
+    die "nginx install finished but binary was not detected."
+  fi
+
+  log "nginx installed: ${NGINX_BIN}"
   return 0
 }
 
@@ -241,7 +302,7 @@ print_nginx_snippet() {
 configure_nginx_ws() {
   local domain="$1" location_path="$2" upstream="$3"
 
-  local conf_path="/etc/nginx/conf.d/wstunnel-${domain}.conf"
+  local conf_path="${NGINX_CONF_DIR}/wstunnel-${domain}.conf"
   local snippet
   snippet="$(build_nginx_snippet "${location_path}" "${upstream}")"
 
@@ -263,13 +324,13 @@ EOF_CONF
   if [[ "${DRY_RUN:-0}" == "1" ]]; then
     log "[dry-run] would write ${conf_path}:"
     printf '%s\n' "${content}"
-    log "[dry-run] nginx -t && systemctl reload nginx"
+    nginx_test_and_reload
     return 0
   fi
 
+  mkdir -p "${NGINX_CONF_DIR}"
   printf '%s\n' "${content}" > "${conf_path}"
-  nginx -t
-  systemctl reload nginx
+  nginx_test_and_reload
   log "nginx config applied: ${conf_path}"
 }
 

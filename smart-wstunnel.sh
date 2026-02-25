@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-SCRIPT_VERSION="0.3.3"
+SCRIPT_VERSION="0.3.7"
 
 DEFAULT_SERVER_LOCAL_ADDR="127.0.0.1"
 DEFAULT_SERVER_LOCAL_PORT="8080"
@@ -26,6 +26,7 @@ Usage:
   smart-wstunnel.sh make-server-service [options]
   smart-wstunnel.sh make-client-service [options]
   smart-wstunnel.sh print-nginx-snippet [options]
+  smart-wstunnel.sh diagnose
 
 Commands:
   wizard
@@ -43,6 +44,9 @@ Commands:
 
   print-nginx-snippet
       Print nginx websocket reverse proxy location.
+
+  diagnose
+      Run built-in health checks (systemd status, journal, listening ports).
 
 Common options:
   --yes
@@ -91,6 +95,97 @@ prompt_port() {
     fi
     warn "Please enter a valid port (1-65535)."
   done
+}
+
+is_valid_ipv4() {
+  local ip="$1"
+  [[ "${ip}" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]] || return 1
+
+  local IFS='.' octet
+  read -r -a octets <<< "${ip}"
+  for octet in "${octets[@]}"; do
+    (( octet >= 0 && octet <= 255 )) || return 1
+  done
+  return 0
+}
+
+is_valid_ipv6() {
+  local ip="$1"
+  [[ -n "${ip}" ]] || return 1
+  command -v python3 >/dev/null 2>&1 || return 1
+  python3 - <<'PY' "${ip}" >/dev/null 2>&1
+import ipaddress
+import sys
+ipaddress.IPv6Address(sys.argv[1])
+PY
+}
+
+is_valid_fqdn() {
+  local d="${1,,}"
+  [[ -n "${d}" && ${#d} -le 253 ]] || return 1
+  [[ "${d}" != .* && "${d}" != *. ]] || return 1
+  [[ "${d}" != *..* ]] || return 1
+
+  local IFS='.' label
+  read -r -a labels <<< "${d}"
+  [[ ${#labels[@]} -ge 2 ]] || return 1
+
+  for label in "${labels[@]}"; do
+    [[ ${#label} -ge 1 && ${#label} -le 63 ]] || return 1
+    [[ "${label}" =~ ^[a-z0-9]([a-z0-9-]*[a-z0-9])?$ ]] || return 1
+  done
+  return 0
+}
+
+is_valid_host() {
+  local host="$1"
+  [[ -n "${host}" ]] || return 1
+  is_valid_ipv4 "${host}" || is_valid_ipv6 "${host}" || is_valid_fqdn "${host}"
+}
+
+is_valid_host_port() {
+  local value="$1" host port
+  [[ -n "${value}" ]] || return 1
+
+  if [[ "${value}" =~ ^\[(.*)\]:([0-9]{1,5})$ ]]; then
+    host="${BASH_REMATCH[1]}"
+    port="${BASH_REMATCH[2]}"
+    is_valid_ipv6 "${host}" || return 1
+  elif [[ "${value}" =~ ^([^:]+):([0-9]{1,5})$ ]]; then
+    host="${BASH_REMATCH[1]}"
+    port="${BASH_REMATCH[2]}"
+    is_valid_host "${host}" || return 1
+  else
+    return 1
+  fi
+
+  (( port >= 1 && port <= 65535 )) || return 1
+  return 0
+}
+
+is_valid_map() {
+  local map="$1"
+  [[ "${map}" =~ ^(tcp|udp)://(.+):([^:]+:[0-9]{1,5})(\?.*)?$ ]] || return 1
+
+  local local_part="${BASH_REMATCH[2]}" remote_part="${BASH_REMATCH[3]}"
+  is_valid_host_port "${local_part}" || return 1
+  is_valid_host_port "${remote_part}" || return 1
+  return 0
+}
+
+validate_domain_or_ip() {
+  local value="$1"
+  is_valid_host "${value}" || die "Invalid --domain value: '${value}' (expected FQDN or IP)"
+}
+
+validate_restrict_to() {
+  local value="$1"
+  is_valid_host_port "${value}" || die "Invalid --restrict-to value: '${value}' (expected host:port or [IPv6]:port)"
+}
+
+validate_map() {
+  local value="$1"
+  is_valid_map "${value}" || die "Invalid --map value: '${value}' (expected tcp://HOST:PORT:HOST:PORT or udp://... )"
 }
 
 run_cmd() {
@@ -178,13 +273,19 @@ nginx_test_and_reload() {
     return 0
   fi
 
-  "${NGINX_BIN}" -t
+  if ! "${NGINX_BIN}" -t; then
+    return 1
+  fi
+
   if [[ "${NGINX_RELOAD_MODE}" == "systemd" ]]; then
-    systemctl reload nginx || "${NGINX_BIN}" -s reload
+    if ! systemctl reload nginx; then
+      "${NGINX_BIN}" -s reload
+    fi
   else
     "${NGINX_BIN}" -s reload
   fi
 }
+
 
 install_binary() {
   require_root
@@ -299,6 +400,18 @@ print_nginx_snippet() {
   build_nginx_snippet "${location_path}" "${upstream}"
 }
 
+restore_nginx_conf() {
+  local conf_path="$1" backup_path="${2:-}"
+
+  if [[ -n "${backup_path}" && -f "${backup_path}" ]]; then
+    cp "${backup_path}" "${conf_path}"
+    warn "Rolled back nginx config to backup: ${backup_path}"
+  else
+    rm -f "${conf_path}"
+    warn "Rolled back nginx config by removing new file: ${conf_path}"
+  fi
+}
+
 configure_nginx_ws() {
   local domain="$1" location_path="$2" upstream="$3"
 
@@ -329,10 +442,26 @@ EOF_CONF
   fi
 
   mkdir -p "${NGINX_CONF_DIR}"
+
+  local backup_path=""
+  if [[ -f "${conf_path}" ]]; then
+    backup_path="${conf_path}.bak.$(date +%Y%m%d-%H%M%S)"
+    cp "${conf_path}" "${backup_path}"
+    log "nginx backup created: ${backup_path}"
+  fi
+
   printf '%s\n' "${content}" > "${conf_path}"
-  nginx_test_and_reload
+
+  if ! nginx_test_and_reload; then
+    warn "nginx test/reload failed after writing ${conf_path}. Rolling back config."
+    restore_nginx_conf "${conf_path}" "${backup_path}"
+    nginx_test_and_reload || true
+    die "nginx config apply failed and rollback was attempted"
+  fi
+
   log "nginx config applied: ${conf_path}"
 }
+
 
 append_tunnel_profile() {
   local mode="$1"
@@ -356,9 +485,11 @@ append_tunnel_profile() {
     1)
       if [[ "${mode}" == "server" ]]; then
         p="$(prompt_value "Enter destination host:port" "127.0.0.1:22335")"
+        validate_restrict_to "${p}"
         out_ref+=("${p}")
       else
         p="$(prompt_value "Enter full map" "tcp://0.0.0.0:22335:127.0.0.1:22335")"
+        validate_map "${p}"
         out_ref+=("${p}")
       fi
       return 0
@@ -395,7 +526,14 @@ make_server_service() {
   done
 
   [[ -n "${secret}" ]] || die "--secret is required"
+  is_valid_host "${listen_addr}" || die "Invalid --listen-addr value: '${listen_addr}'"
+  [[ "${listen_port}" =~ ^[0-9]+$ ]] && (( listen_port >= 1 && listen_port <= 65535 )) || die "Invalid --listen-port value: '${listen_port}'"
   [[ ${#restrict_to[@]} -gt 0 ]] || die "At least one --restrict-to is required"
+
+  local rt
+  for rt in "${restrict_to[@]}"; do
+    validate_restrict_to "${rt}"
+  done
 
   local service_file="/etc/systemd/system/wstunnel-server.service"
   {
@@ -452,7 +590,14 @@ make_client_service() {
 
   [[ -n "${domain}" ]] || die "--domain is required"
   [[ -n "${secret}" ]] || die "--secret is required"
+  validate_domain_or_ip "${domain}"
+  [[ "${ping_sec}" =~ ^[0-9]+$ ]] || die "Ping interval must be numeric"
   [[ ${#maps[@]} -gt 0 ]] || die "At least one --map is required"
+
+  local mp
+  for mp in "${maps[@]}"; do
+    validate_map "${mp}"
+  done
 
   local service_file="/etc/systemd/system/wstunnel-client.service"
   {
@@ -491,8 +636,72 @@ make_client_service() {
   log "Client service created"
 }
 
+print_out_summary() {
+  local service_name="wstunnel-server.service"
+  local service_file="/etc/systemd/system/wstunnel-server.service"
+  local nginx_conf_path="${1:-}"
+
+  printf '
+=== OUT Post-install checklist ===
+'
+  printf 'Service: %s
+' "${service_name}"
+  printf 'Service file: %s
+' "${service_file}"
+  if [[ -n "${nginx_conf_path}" ]]; then
+    printf 'Nginx config: %s
+' "${nginx_conf_path}"
+  else
+    printf 'Nginx config: (not auto-generated in this run)
+'
+  fi
+
+  printf '
+Health checks (copy/paste):
+'
+  printf 'sudo systemctl status %s --no-pager -l
+' "${service_name}"
+  printf 'sudo journalctl -u %s -n 200 --no-pager
+' "${service_name}"
+  printf "sudo ss -lntup | egrep '(:443|:8080|:22335|:24443|:51820)' || true
+"
+  if [[ -n "${nginx_conf_path}" ]]; then
+    printf 'sudo %s -t
+' "${NGINX_BIN}"
+  fi
+  printf '=== End checklist ===
+
+'
+}
+
+print_in_summary() {
+  local service_name="wstunnel-client.service"
+  local service_file="/etc/systemd/system/wstunnel-client.service"
+
+  printf '
+=== IN Post-install checklist ===
+'
+  printf 'Service: %s
+' "${service_name}"
+  printf 'Service file: %s
+' "${service_file}"
+
+  printf '
+Health checks (copy/paste):
+'
+  printf 'sudo systemctl status %s --no-pager -l
+' "${service_name}"
+  printf 'sudo journalctl -u %s -n 200 --no-pager
+' "${service_name}"
+  printf "sudo ss -lntup | egrep '(:443|:8080|:22335|:24443|:51820)' || true
+"
+  printf '=== End checklist ===
+
+'
+}
+
 wizard_out() {
-  local secret listen_addr listen_port domain location_path
+  local secret listen_addr listen_port domain location_path nginx_conf_path=""
   local -a restricts=()
 
   secret="$(prompt_value "Enter shared secret" "gw-2026-01")"
@@ -518,10 +727,12 @@ wizard_out() {
 
   if ensure_nginx_installed; then
     domain="$(prompt_value "Enter OUT domain for nginx server_name" "tnl.example.com")"
+    validate_domain_or_ip "${domain}"
     location_path="$(prompt_value "nginx location path" "${DEFAULT_NGINX_LOCATION_PATH}")"
 
     if confirm "Auto-generate nginx config and reload nginx now?"; then
       configure_nginx_ws "${domain}" "${location_path}" "http://${listen_addr}:${listen_port}"
+      nginx_conf_path="${NGINX_CONF_DIR}/wstunnel-${domain}.conf"
     else
       printf '\n=== nginx snippet ===\n'
       build_nginx_snippet "${location_path}" "http://${listen_addr}:${listen_port}"
@@ -529,6 +740,7 @@ wizard_out() {
     fi
   fi
 
+  print_out_summary "${nginx_conf_path}"
   log "OUT setup finished."
 }
 
@@ -537,6 +749,7 @@ wizard_in() {
   local -a maps=()
 
   domain="$(prompt_value "Enter OUT domain (TLS on 443)" "tnl.example.com")"
+  validate_domain_or_ip "${domain}"
   secret="$(prompt_value "Enter shared secret (must match OUT)" "gw-2026-01")"
   ping_sec="$(prompt_value "WebSocket ping interval (sec)" "${DEFAULT_CLIENT_PING_SEC}")"
   [[ "${ping_sec}" =~ ^[0-9]+$ ]] || die "Ping interval must be numeric"
@@ -557,8 +770,48 @@ wizard_in() {
     args+=(--map "${m}")
   done
   make_client_service "${args[@]}"
+  print_in_summary
   log "IN setup finished."
 }
+
+run_diagnose_service_check() {
+  local service_name="$1"
+  printf '\n--- %s ---\n' "${service_name}"
+
+  if ! command -v systemctl >/dev/null 2>&1; then
+    warn "systemctl not found; skipping status for ${service_name}"
+  else
+    if ! systemctl status "${service_name}" --no-pager -l 2>/tmp/smart-wstunnel.systemctl.err; then
+      warn "Could not read systemd status for ${service_name} (non-systemd environment or insufficient privileges)."
+      sed -n '1,2p' /tmp/smart-wstunnel.systemctl.err >&2 || true
+    fi
+  fi
+
+  if ! command -v journalctl >/dev/null 2>&1; then
+    warn "journalctl not found; skipping logs for ${service_name}"
+  else
+    if ! journalctl -u "${service_name}" -n 100 --no-pager 2>/tmp/smart-wstunnel.journal.err; then
+      warn "Could not read journal logs for ${service_name}."
+      sed -n '1,2p' /tmp/smart-wstunnel.journal.err >&2 || true
+    fi
+  fi
+}
+
+diagnose() {
+  printf '=== smart-wstunnel diagnose ===\n'
+  run_diagnose_service_check "wstunnel-server"
+  run_diagnose_service_check "wstunnel-client"
+
+  printf '\n--- listening ports (common tunnel ports) ---\n'
+  if command -v ss >/dev/null 2>&1; then
+    ss -lntup | egrep '(:443|:8080|:22335|:24443|:51820)' || true
+  else
+    warn "ss command not found; skipping ports check"
+  fi
+
+  printf '\n=== diagnose completed ===\n'
+}
+
 
 wizard() {
   require_root
@@ -613,6 +866,7 @@ main() {
     make-server-service) make_server_service "$@" ;;
     make-client-service) make_client_service "$@" ;;
     print-nginx-snippet) print_nginx_snippet "$@" ;;
+    diagnose) diagnose "$@" ;;
     -h|--help|help) usage ;;
     version|--version) echo "smart-wstunnel ${SCRIPT_VERSION}" ;;
     *) die "Unknown command: ${cmd}" ;;

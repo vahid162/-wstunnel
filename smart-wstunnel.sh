@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-SCRIPT_VERSION="0.1.0"
+SCRIPT_VERSION="0.2.0"
 
 DEFAULT_SERVER_LOCAL_ADDR="127.0.0.1"
 DEFAULT_SERVER_LOCAL_PORT="8080"
@@ -25,12 +25,17 @@ usage() {
 smart-wstunnel - bootstrap and manage wstunnel on Linux servers
 
 Usage:
+  smart-wstunnel.sh wizard
   smart-wstunnel.sh install-binary [--version <tag>]
   smart-wstunnel.sh make-server-service [options]
   smart-wstunnel.sh make-client-service [options]
   smart-wstunnel.sh print-nginx-snippet [options]
 
 Commands:
+  wizard
+      Beginner-friendly interactive setup.
+      Asks questions step-by-step and prepares OUT or IN server.
+
   install-binary
       Install latest (or pinned) wstunnel binary to /usr/local/bin/wstunnel.
 
@@ -64,25 +69,9 @@ Client service options:
                                   udp://0.0.0.0:51820:127.0.0.1:51820?timeout_sec=0
   --ping-sec <seconds>          Default: 30
 
-Nginx snippet options:
-  --location-path <path>        Default: /
-  --upstream <url>              Default: http://127.0.0.1:8080
-
 Examples:
-  # OUT server:
-  sudo ./smart-wstunnel.sh install-binary
-  sudo ./smart-wstunnel.sh make-server-service \
-    --secret gw-2026-01 \
-    --restrict-to 127.0.0.1:22335 \
-    --restrict-to 127.0.0.1:24443
-
-  # IN gateway:
-  sudo ./smart-wstunnel.sh install-binary
-  sudo ./smart-wstunnel.sh make-client-service \
-    --domain tnl.example.com \
-    --secret gw-2026-01 \
-    --map tcp://0.0.0.0:22335:127.0.0.1:22335 \
-    --map udp://0.0.0.0:51820:127.0.0.1:51820?timeout_sec=0
+  sudo ./smart-wstunnel.sh wizard
+  sudo ./smart-wstunnel.sh install-binary --version v10.1.8
 USAGE
 }
 
@@ -97,14 +86,122 @@ confirm() {
   if [[ "${ASSUME_YES:-0}" == "1" ]]; then
     return 0
   fi
+  local answer
   read -r -p "${prompt} [y/N]: " answer
   [[ "${answer,,}" == "y" || "${answer,,}" == "yes" ]]
 }
 
+prompt_value() {
+  local prompt="$1"
+  local default="${2:-}"
+  local value=""
+
+  if [[ -n "${default}" ]]; then
+    read -r -p "${prompt} [${default}]: " value
+    printf '%s' "${value:-$default}"
+  else
+    read -r -p "${prompt}: " value
+    printf '%s' "${value}"
+  fi
+}
+
+prompt_port() {
+  local prompt="$1"
+  local default="$2"
+  local val
+  while true; do
+    val="$(prompt_value "${prompt}" "${default}")"
+    if [[ "${val}" =~ ^[0-9]+$ ]] && (( val >= 1 && val <= 65535 )); then
+      printf '%s' "${val}"
+      return 0
+    fi
+    warn "Please enter a valid port (1-65535)."
+  done
+}
+
+append_tunnel_profile() {
+  local mode="$1"
+  local -n out_ref="$2"
+
+  printf '\nChoose tunnel profile:\n'
+  printf '  1) Custom\n'
+  printf '  2) Xray/V2Ray (TCP)\n'
+  printf '  3) OpenVPN (TCP)\n'
+  printf '  4) WireGuard (UDP + timeout_sec=0)\n'
+  printf '  5) Cisco AnyConnect (TLS/TCP)\n'
+
+  local profile
+  profile="$(prompt_value "Enter choice" "1")"
+
+  case "${profile}" in
+    2)
+      local p
+      p="$(prompt_port "Port" "10000")"
+      if [[ "${mode}" == "server" ]]; then
+        out_ref+=("127.0.0.1:${p}")
+      else
+        out_ref+=("tcp://0.0.0.0:${p}:127.0.0.1:${p}")
+      fi
+      ;;
+    3)
+      local p
+      p="$(prompt_port "Port" "22335")"
+      if [[ "${mode}" == "server" ]]; then
+        out_ref+=("127.0.0.1:${p}")
+      else
+        out_ref+=("tcp://0.0.0.0:${p}:127.0.0.1:${p}")
+      fi
+      ;;
+    4)
+      local p
+      p="$(prompt_port "Port" "51820")"
+      if [[ "${mode}" == "server" ]]; then
+        out_ref+=("127.0.0.1:${p}")
+      else
+        out_ref+=("udp://0.0.0.0:${p}:127.0.0.1:${p}?timeout_sec=0")
+      fi
+      ;;
+    5)
+      local p
+      p="$(prompt_port "Port" "4443")"
+      if [[ "${mode}" == "server" ]]; then
+        out_ref+=("127.0.0.1:${p}")
+      else
+        out_ref+=("tcp://0.0.0.0:${p}:127.0.0.1:${p}")
+      fi
+      ;;
+    1)
+      if [[ "${mode}" == "server" ]]; then
+        local r
+        r="$(prompt_value "Enter destination host:port (example 127.0.0.1:22335)")"
+        [[ -n "${r}" ]] || die "Value cannot be empty"
+        out_ref+=("${r}")
+      else
+        local m
+        m="$(prompt_value "Enter full map (example tcp://0.0.0.0:22335:127.0.0.1:22335)")"
+        [[ -n "${m}" ]] || die "Value cannot be empty"
+        out_ref+=("${m}")
+      fi
+      ;;
+    *)
+      warn "Invalid choice. Using Custom mode."
+      append_tunnel_profile "${mode}" out_ref
+      ;;
+  esac
+}
+
 install_binary() {
   require_root
-  local requested_version="${1:-}"
-  local tmp release_json api_url urls pick asset extracted
+  local requested_version=""
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --version) requested_version="${2:-}"; shift 2 ;;
+      *) die "Unknown option for install-binary: $1" ;;
+    esac
+  done
+
+  local tmp release_json api_url urls pick extracted
   tmp="$(mktemp -d)"
   trap 'rm -rf "${tmp}"' RETURN
 
@@ -149,6 +246,31 @@ install_binary() {
   install -m 0755 "${extracted}" /usr/local/bin/wstunnel
   /usr/local/bin/wstunnel --help >/dev/null
   log "wstunnel installed successfully"
+}
+
+ensure_requirements() {
+  require_root
+  local -a needed=(curl jq file tar unzip systemctl)
+  local -a missing=()
+  local b
+  for b in "${needed[@]}"; do
+    if ! command -v "${b}" >/dev/null 2>&1; then
+      missing+=("${b}")
+    fi
+  done
+
+  if [[ ${#missing[@]} -eq 0 ]]; then
+    return 0
+  fi
+
+  log "Installing missing packages: ${missing[*]}"
+  if [[ "${DRY_RUN:-0}" == "1" ]]; then
+    log "[dry-run] apt-get update && apt-get install -y curl jq file tar unzip systemd"
+    return 0
+  fi
+
+  apt-get update
+  apt-get install -y curl jq file tar unzip systemd
 }
 
 make_server_service() {
@@ -287,6 +409,84 @@ location ${location_path} {
 EOF_SNIPPET
 }
 
+wizard() {
+  require_root
+
+  log "Welcome to smart-wstunnel wizard"
+  log "This wizard will ask simple questions and configure one server."
+
+  ensure_requirements
+
+  if confirm "Install/upgrade wstunnel binary now?"; then
+    install_binary
+  else
+    warn "Skipping binary installation"
+  fi
+
+  local role
+  printf '\nSelect server role:\n'
+  printf '  1) OUT server (wstunnel server behind nginx)\n'
+  printf '  2) IN gateway (wstunnel client)\n'
+  role="$(prompt_value "Enter choice" "1")"
+
+  case "${role}" in
+    1)
+      local secret listen_addr listen_port
+      local -a restricts=()
+
+      secret="$(prompt_value "Enter shared secret for path prefix" "gw-2026-01")"
+      listen_addr="$(prompt_value "wstunnel listen address" "${DEFAULT_SERVER_LOCAL_ADDR}")"
+      listen_port="$(prompt_port "wstunnel listen port" "${DEFAULT_SERVER_LOCAL_PORT}")"
+
+      while true; do
+        append_tunnel_profile "server" restricts
+        if ! confirm "Add another allowed destination (restrict-to)?"; then
+          break
+        fi
+      done
+
+      local -a args=(--secret "${secret}" --listen-addr "${listen_addr}" --listen-port "${listen_port}")
+      local r
+      for r in "${restricts[@]}"; do
+        args+=(--restrict-to "${r}")
+      done
+      make_server_service "${args[@]}"
+
+      printf '\n=== nginx snippet (copy into your TLS vhost on OUT) ===\n'
+      print_nginx_snippet --location-path / --upstream "http://${listen_addr}:${listen_port}"
+      printf '=== end ===\n\n'
+      log "Done. Next step: apply nginx config, then reload nginx."
+      ;;
+    2)
+      local domain secret ping_sec
+      local -a maps=()
+
+      domain="$(prompt_value "Enter OUT domain (TLS on 443)" "tnl.example.com")"
+      secret="$(prompt_value "Enter shared secret (must match OUT)" "gw-2026-01")"
+      ping_sec="$(prompt_value "WebSocket ping interval (sec)" "${DEFAULT_CLIENT_PING_SEC}")"
+      [[ "${ping_sec}" =~ ^[0-9]+$ ]] || die "Ping interval must be numeric"
+
+      while true; do
+        append_tunnel_profile "client" maps
+        if ! confirm "Add another map?"; then
+          break
+        fi
+      done
+
+      local -a args=(--domain "${domain}" --secret "${secret}" --ping-sec "${ping_sec}")
+      local m
+      for m in "${maps[@]}"; do
+        args+=(--map "${m}")
+      done
+      make_client_service "${args[@]}"
+      log "Done. IN gateway is ready."
+      ;;
+    *)
+      die "Invalid choice"
+      ;;
+  esac
+}
+
 main() {
   [[ $# -ge 1 ]] || { usage; exit 1; }
 
@@ -308,8 +508,11 @@ main() {
   set -- "${filtered[@]}"
 
   case "${cmd}" in
+    wizard)
+      wizard
+      ;;
     install-binary)
-      install_binary "${1:-}"
+      install_binary "$@"
       ;;
     make-server-service)
       make_server_service "$@"

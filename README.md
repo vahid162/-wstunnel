@@ -7,7 +7,7 @@
 بعد از اینکه فایل اسکریپت روی GitHub قرار گرفت، می‌توانی مستقیم این دستور را بزنی:
 
 ```bash
-bash <(curl -fsSL "https://raw.githubusercontent.com/vahid162/-wstunnel/main/smart-wstunnel.sh") wizard
+bash <(curl -fsSL "https://raw.githubusercontent.com/<YOUR_USER>/<YOUR_REPO>/main/smart-wstunnel.sh") wizard
 ```
 
 یا داخل همین ریپو:
@@ -18,6 +18,7 @@ sudo bash smart-wstunnel.sh wizard
 
 ## این Wizard چه چیزهایی را خودکار می‌کند؟
 
+- در حالت `--yes` مقدارهای پیش‌فرض را خودکار انتخاب می‌کند (برای اجرای غیرتعاملی).
 - بررسی و نصب dependencyهای لازم (`curl`, `jq`, `unzip`, ...)
 - نصب/آپدیت باینری رسمی `wstunnel`
 - انتخاب نقش سرور (OUT یا IN)
@@ -52,4 +53,4 @@ sudo ss -lntup | egrep '(:443|:8080|:22335|:24443|:51820)\b' || true
 
 ## نسخه
 
-نسخه فعلی: `0.3.0`
+نسخه فعلی: `0.3.1`

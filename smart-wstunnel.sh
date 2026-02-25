@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-SCRIPT_VERSION="0.3.0"
+SCRIPT_VERSION="0.3.1"
 
 DEFAULT_SERVER_LOCAL_ADDR="127.0.0.1"
 DEFAULT_SERVER_LOCAL_PORT="8080"
@@ -61,6 +61,13 @@ confirm() {
 
 prompt_value() {
   local prompt="$1" default="${2:-}" value=""
+
+  if [[ "${ASSUME_YES:-0}" == "1" && -n "${default}" ]]; then
+    printf '[INFO] Auto-selected default for %s: %s\n' "${prompt}" "${default}" >&2
+    printf '%s' "${default}"
+    return 0
+  fi
+
   if [[ -n "${default}" ]]; then
     read -r -p "${prompt} [${default}]: " value
     printf '%s' "${value:-$default}"
@@ -433,6 +440,9 @@ wizard_out() {
 
   while true; do
     append_tunnel_profile "server" restricts
+    if [[ "${ASSUME_YES:-0}" == "1" ]]; then
+      break
+    fi
     if ! confirm "Add another allowed destination?"; then
       break
     fi
@@ -472,6 +482,9 @@ wizard_in() {
 
   while true; do
     append_tunnel_profile "client" maps
+    if [[ "${ASSUME_YES:-0}" == "1" ]]; then
+      break
+    fi
     if ! confirm "Add another map?"; then
       break
     fi

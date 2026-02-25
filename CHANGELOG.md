@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.3.1
+- Fixed wizard `--yes` behavior to avoid infinite add-more loops and auto-select defaults safely.
+
 ## 0.3.0
 - Upgraded wizard to true end-to-end interactive installer with OUT/IN flows.
 - Added nginx detection and optional auto-install/config/reload on OUT.

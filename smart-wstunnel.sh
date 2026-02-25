@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-SCRIPT_VERSION="0.3.3"
+SCRIPT_VERSION="0.3.4"
 
 DEFAULT_SERVER_LOCAL_ADDR="127.0.0.1"
 DEFAULT_SERVER_LOCAL_PORT="8080"
@@ -91,6 +91,97 @@ prompt_port() {
     fi
     warn "Please enter a valid port (1-65535)."
   done
+}
+
+is_valid_ipv4() {
+  local ip="$1"
+  [[ "${ip}" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]] || return 1
+
+  local IFS='.' octet
+  read -r -a octets <<< "${ip}"
+  for octet in "${octets[@]}"; do
+    (( octet >= 0 && octet <= 255 )) || return 1
+  done
+  return 0
+}
+
+is_valid_ipv6() {
+  local ip="$1"
+  [[ -n "${ip}" ]] || return 1
+  command -v python3 >/dev/null 2>&1 || return 1
+  python3 - <<'PY' "${ip}" >/dev/null 2>&1
+import ipaddress
+import sys
+ipaddress.IPv6Address(sys.argv[1])
+PY
+}
+
+is_valid_fqdn() {
+  local d="${1,,}"
+  [[ -n "${d}" && ${#d} -le 253 ]] || return 1
+  [[ "${d}" != .* && "${d}" != *. ]] || return 1
+  [[ "${d}" != *..* ]] || return 1
+
+  local IFS='.' label
+  read -r -a labels <<< "${d}"
+  [[ ${#labels[@]} -ge 2 ]] || return 1
+
+  for label in "${labels[@]}"; do
+    [[ ${#label} -ge 1 && ${#label} -le 63 ]] || return 1
+    [[ "${label}" =~ ^[a-z0-9]([a-z0-9-]*[a-z0-9])?$ ]] || return 1
+  done
+  return 0
+}
+
+is_valid_host() {
+  local host="$1"
+  [[ -n "${host}" ]] || return 1
+  is_valid_ipv4 "${host}" || is_valid_ipv6 "${host}" || is_valid_fqdn "${host}"
+}
+
+is_valid_host_port() {
+  local value="$1" host port
+  [[ -n "${value}" ]] || return 1
+
+  if [[ "${value}" =~ ^\[(.*)\]:([0-9]{1,5})$ ]]; then
+    host="${BASH_REMATCH[1]}"
+    port="${BASH_REMATCH[2]}"
+    is_valid_ipv6 "${host}" || return 1
+  elif [[ "${value}" =~ ^([^:]+):([0-9]{1,5})$ ]]; then
+    host="${BASH_REMATCH[1]}"
+    port="${BASH_REMATCH[2]}"
+    is_valid_host "${host}" || return 1
+  else
+    return 1
+  fi
+
+  (( port >= 1 && port <= 65535 )) || return 1
+  return 0
+}
+
+is_valid_map() {
+  local map="$1"
+  [[ "${map}" =~ ^(tcp|udp)://(.+):([^:]+:[0-9]{1,5})(\?.*)?$ ]] || return 1
+
+  local local_part="${BASH_REMATCH[2]}" remote_part="${BASH_REMATCH[3]}"
+  is_valid_host_port "${local_part}" || return 1
+  is_valid_host_port "${remote_part}" || return 1
+  return 0
+}
+
+validate_domain_or_ip() {
+  local value="$1"
+  is_valid_host "${value}" || die "Invalid --domain value: '${value}' (expected FQDN or IP)"
+}
+
+validate_restrict_to() {
+  local value="$1"
+  is_valid_host_port "${value}" || die "Invalid --restrict-to value: '${value}' (expected host:port or [IPv6]:port)"
+}
+
+validate_map() {
+  local value="$1"
+  is_valid_map "${value}" || die "Invalid --map value: '${value}' (expected tcp://HOST:PORT:HOST:PORT or udp://... )"
 }
 
 run_cmd() {
@@ -356,9 +447,11 @@ append_tunnel_profile() {
     1)
       if [[ "${mode}" == "server" ]]; then
         p="$(prompt_value "Enter destination host:port" "127.0.0.1:22335")"
+        validate_restrict_to "${p}"
         out_ref+=("${p}")
       else
         p="$(prompt_value "Enter full map" "tcp://0.0.0.0:22335:127.0.0.1:22335")"
+        validate_map "${p}"
         out_ref+=("${p}")
       fi
       return 0
@@ -395,7 +488,14 @@ make_server_service() {
   done
 
   [[ -n "${secret}" ]] || die "--secret is required"
+  is_valid_host "${listen_addr}" || die "Invalid --listen-addr value: '${listen_addr}'"
+  [[ "${listen_port}" =~ ^[0-9]+$ ]] && (( listen_port >= 1 && listen_port <= 65535 )) || die "Invalid --listen-port value: '${listen_port}'"
   [[ ${#restrict_to[@]} -gt 0 ]] || die "At least one --restrict-to is required"
+
+  local rt
+  for rt in "${restrict_to[@]}"; do
+    validate_restrict_to "${rt}"
+  done
 
   local service_file="/etc/systemd/system/wstunnel-server.service"
   {
@@ -452,7 +552,14 @@ make_client_service() {
 
   [[ -n "${domain}" ]] || die "--domain is required"
   [[ -n "${secret}" ]] || die "--secret is required"
+  validate_domain_or_ip "${domain}"
+  [[ "${ping_sec}" =~ ^[0-9]+$ ]] || die "Ping interval must be numeric"
   [[ ${#maps[@]} -gt 0 ]] || die "At least one --map is required"
+
+  local mp
+  for mp in "${maps[@]}"; do
+    validate_map "${mp}"
+  done
 
   local service_file="/etc/systemd/system/wstunnel-client.service"
   {
@@ -518,6 +625,7 @@ wizard_out() {
 
   if ensure_nginx_installed; then
     domain="$(prompt_value "Enter OUT domain for nginx server_name" "tnl.example.com")"
+    validate_domain_or_ip "${domain}"
     location_path="$(prompt_value "nginx location path" "${DEFAULT_NGINX_LOCATION_PATH}")"
 
     if confirm "Auto-generate nginx config and reload nginx now?"; then
@@ -537,6 +645,7 @@ wizard_in() {
   local -a maps=()
 
   domain="$(prompt_value "Enter OUT domain (TLS on 443)" "tnl.example.com")"
+  validate_domain_or_ip "${domain}"
   secret="$(prompt_value "Enter shared secret (must match OUT)" "gw-2026-01")"
   ping_sec="$(prompt_value "WebSocket ping interval (sec)" "${DEFAULT_CLIENT_PING_SEC}")"
   [[ "${ping_sec}" =~ ^[0-9]+$ ]] || die "Ping interval must be numeric"

@@ -7,7 +7,7 @@
 بعد از اینکه فایل اسکریپت روی GitHub قرار گرفت، می‌توانی مستقیم این دستور را بزنی:
 
 ```bash
-bash <(curl -fsSL "https://raw.githubusercontent.com/<YOUR_USER>/<YOUR_REPO>/main/smart-wstunnel.sh") wizard
+bash <(curl -fsSL "https://raw.githubusercontent.com/vahid162/-wstunnel/main/smart-wstunnel.sh") wizard
 ```
 
 یا داخل همین ریپو:

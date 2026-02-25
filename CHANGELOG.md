@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.3.1
+- Clarified one-line GitHub installer usage and explained placeholder replacement with real repository path.
+
 ## 0.3.0
 - Upgraded wizard to true end-to-end interactive installer with OUT/IN flows.
 - Added nginx detection and optional auto-install/config/reload on OUT.

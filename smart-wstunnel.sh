@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-SCRIPT_VERSION="0.3.5"
+SCRIPT_VERSION="0.3.6"
 
 DEFAULT_SERVER_LOCAL_ADDR="127.0.0.1"
 DEFAULT_SERVER_LOCAL_PORT="8080"
@@ -632,8 +632,72 @@ make_client_service() {
   log "Client service created"
 }
 
+print_out_summary() {
+  local service_name="wstunnel-server.service"
+  local service_file="/etc/systemd/system/wstunnel-server.service"
+  local nginx_conf_path="${1:-}"
+
+  printf '
+=== OUT Post-install checklist ===
+'
+  printf 'Service: %s
+' "${service_name}"
+  printf 'Service file: %s
+' "${service_file}"
+  if [[ -n "${nginx_conf_path}" ]]; then
+    printf 'Nginx config: %s
+' "${nginx_conf_path}"
+  else
+    printf 'Nginx config: (not auto-generated in this run)
+'
+  fi
+
+  printf '
+Health checks (copy/paste):
+'
+  printf 'sudo systemctl status %s --no-pager -l
+' "${service_name}"
+  printf 'sudo journalctl -u %s -n 200 --no-pager
+' "${service_name}"
+  printf "sudo ss -lntup | egrep '(:443|:8080|:22335|:24443|:51820)' || true
+"
+  if [[ -n "${nginx_conf_path}" ]]; then
+    printf 'sudo %s -t
+' "${NGINX_BIN}"
+  fi
+  printf '=== End checklist ===
+
+'
+}
+
+print_in_summary() {
+  local service_name="wstunnel-client.service"
+  local service_file="/etc/systemd/system/wstunnel-client.service"
+
+  printf '
+=== IN Post-install checklist ===
+'
+  printf 'Service: %s
+' "${service_name}"
+  printf 'Service file: %s
+' "${service_file}"
+
+  printf '
+Health checks (copy/paste):
+'
+  printf 'sudo systemctl status %s --no-pager -l
+' "${service_name}"
+  printf 'sudo journalctl -u %s -n 200 --no-pager
+' "${service_name}"
+  printf "sudo ss -lntup | egrep '(:443|:8080|:22335|:24443|:51820)' || true
+"
+  printf '=== End checklist ===
+
+'
+}
+
 wizard_out() {
-  local secret listen_addr listen_port domain location_path
+  local secret listen_addr listen_port domain location_path nginx_conf_path=""
   local -a restricts=()
 
   secret="$(prompt_value "Enter shared secret" "gw-2026-01")"
@@ -664,6 +728,7 @@ wizard_out() {
 
     if confirm "Auto-generate nginx config and reload nginx now?"; then
       configure_nginx_ws "${domain}" "${location_path}" "http://${listen_addr}:${listen_port}"
+      nginx_conf_path="${NGINX_CONF_DIR}/wstunnel-${domain}.conf"
     else
       printf '\n=== nginx snippet ===\n'
       build_nginx_snippet "${location_path}" "http://${listen_addr}:${listen_port}"
@@ -671,6 +736,7 @@ wizard_out() {
     fi
   fi
 
+  print_out_summary "${nginx_conf_path}"
   log "OUT setup finished."
 }
 
@@ -700,6 +766,7 @@ wizard_in() {
     args+=(--map "${m}")
   done
   make_client_service "${args[@]}"
+  print_in_summary
   log "IN setup finished."
 }
 

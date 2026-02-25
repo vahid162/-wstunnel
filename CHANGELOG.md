@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.6
+- Added post-install checklist summary at the end of wizard runs (OUT/IN) with copy-ready health-check commands.
+- Included rendered service names/files and nginx config path (when auto-generated) in final wizard summary.
+
 ## 0.3.5
 - Added nginx config backup (timestamped) before overwrite in auto-config flow.
 - Added automatic rollback if nginx config test/reload fails after applying new config.

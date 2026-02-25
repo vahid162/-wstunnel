@@ -4,20 +4,11 @@
 
 ## اجرای یک‌خطی (مثل ریپوهای auto-installer)
 
-برای اجرای مستقیم از GitHub باید اسکریپت داخل **ریپوی خودت** push شده باشد.
+بعد از اینکه فایل اسکریپت روی GitHub قرار گرفت، می‌توانی مستقیم این دستور را بزنی:
 
 ```bash
 bash <(curl -fsSL "https://raw.githubusercontent.com/<YOUR_USER>/<YOUR_REPO>/main/smart-wstunnel.sh") wizard
 ```
-
-`<YOUR_USER>/<YOUR_REPO>` یعنی جایگزین با آدرس واقعی ریپوی خودت.
-مثال: اگر ریپوی تو `github.com/alireza137/-wstunnel` باشد، دستور واقعی این می‌شود:
-
-```bash
-bash <(curl -fsSL "https://raw.githubusercontent.com/alireza137/-wstunnel/main/smart-wstunnel.sh") wizard
-```
-
-چون در این محیط، آدرس GitHub نهایی اکانت شما به‌صورت قطعی معلوم نبود، قبلاً به شکل placeholder نوشته شده بود تا اشتباه برای کاربر دیگر کپی نشود.
 
 یا داخل همین ریپو:
 
@@ -61,4 +52,4 @@ sudo ss -lntup | egrep '(:443|:8080|:22335|:24443|:51820)\b' || true
 
 ## نسخه
 
-نسخه فعلی: `0.3.1`
+نسخه فعلی: `0.3.0`
